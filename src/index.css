@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Nunito", "Comic Sans MS", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer utilities {
+  .btn-kid {
+    @apply bg-white border-4 border-black rounded-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] 
+           hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] 
+           active:translate-y-[4px] active:shadow-none transition-all font-bold select-none flex items-center justify-center;
+  }
+  .btn-kid-active {
+    @apply translate-y-[4px] shadow-none bg-yellow-300;
+  }
+  .color-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: white;
+    border: 4px solid black;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  }
+  .color-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: white;
+    border: 4px solid black;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  }
+}
+
+body {
+  background-color: #f0f9ff;
+  overflow: hidden;
+  touch-action: none; /* Prevent pull-to-refresh and scrolling on mobile */
+}
