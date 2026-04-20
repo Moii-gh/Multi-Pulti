@@ -14,12 +14,28 @@ export function floodFill(ctx: CanvasRenderingContext2D, startX: number, startY:
   const fillRgba = hexToRgba(fillColorHex);
   if (!fillRgba) return;
 
-  if (startR === fillRgba.r && startG === fillRgba.g && startB === fillRgba.b && startA === fillRgba.a) {
+  // Set a tolerance for color matching to handle anti-aliasing artifacts
+  const tolerance = 64; 
+
+  // Fast check: If start color is very close to fill color, don't fill
+  if (Math.abs(startR - fillRgba.r) <= tolerance &&
+      Math.abs(startG - fillRgba.g) <= tolerance &&
+      Math.abs(startB - fillRgba.b) <= tolerance &&
+      Math.abs(startA - fillRgba.a) <= tolerance) {
     return;
   }
 
   const matchColor = (pos: number) => {
-    return data[pos] === startR && data[pos + 1] === startG && data[pos + 2] === startB && data[pos + 3] === startA;
+    const r = data[pos];
+    const g = data[pos + 1];
+    const b = data[pos + 2];
+    const a = data[pos + 3];
+    
+    // Check if the current pixel color is within tolerance of the starting color
+    return Math.abs(r - startR) <= tolerance &&
+           Math.abs(g - startG) <= tolerance &&
+           Math.abs(b - startB) <= tolerance &&
+           Math.abs(a - startA) <= tolerance;
   };
 
   const colorPixel = (pos: number) => {
@@ -30,20 +46,54 @@ export function floodFill(ctx: CanvasRenderingContext2D, startX: number, startY:
   };
 
   const stack = [startX, startY];
-
+  let reachLeft, reachRight;
+  
+  // Use a scanline approach for much faster and cleaner filling
   while (stack.length > 0) {
-    const y = stack.pop()!;
-    const x = stack.pop()!;
+    let y = stack.pop()!;
+    let x = stack.pop()!;
 
-    const pos = (y * width + x) * 4;
-    if (!matchColor(pos)) continue;
+    let pos = (y * width + x) * 4;
 
-    colorPixel(pos);
-
-    if (x > 0) stack.push(x - 1, y);
-    if (x < width - 1) stack.push(x + 1, y);
-    if (y > 0) stack.push(x, y - 1);
-    if (y < height - 1) stack.push(x, y + 1);
+    while (y >= 0 && matchColor(pos)) {
+      y--;
+      pos -= width * 4;
+    }
+    
+    pos += width * 4;
+    y++;
+    
+    reachLeft = false;
+    reachRight = false;
+    
+    while (y < height && matchColor(pos)) {
+      colorPixel(pos);
+      
+      if (x > 0) {
+        if (matchColor(pos - 4)) {
+          if (!reachLeft) {
+            stack.push(x - 1, y);
+            reachLeft = true;
+          }
+        } else if (reachLeft) {
+          reachLeft = false;
+        }
+      }
+      
+      if (x < width - 1) {
+        if (matchColor(pos + 4)) {
+          if (!reachRight) {
+            stack.push(x + 1, y);
+            reachRight = true;
+          }
+        } else if (reachRight) {
+          reachRight = false;
+        }
+      }
+      
+      y++;
+      pos += width * 4;
+    }
   }
 
   ctx.putImageData(imageData, 0, 0);
