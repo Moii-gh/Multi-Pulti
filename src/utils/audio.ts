@@ -1,15 +1,24 @@
-const getAudioCtx = () => {
+type WindowWithWebkitAudio = Window & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
+const createAudioContext = () => {
   if (typeof window === 'undefined') return null;
-  return new (window.AudioContext || (window as any).webkitAudioContext)();
+
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as WindowWithWebkitAudio).webkitAudioContext;
+
+  return AudioContextClass ? new AudioContextClass() : null;
 };
 
 let audioCtx: AudioContext | null = null;
 
 function playTone(freq: number, type: OscillatorType, duration: number) {
-  if (!audioCtx) audioCtx = getAudioCtx();
+  if (!audioCtx) audioCtx = createAudioContext();
   if (!audioCtx) return;
   
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (audioCtx.state === 'suspended') void audioCtx.resume();
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
   

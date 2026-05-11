@@ -3,7 +3,23 @@ export interface Point {
   y: number;
 }
 
-export function detectSmartShape(points: Point[]) {
+export type SmartShape =
+  | {
+      type: "ellipse";
+      cx: number;
+      cy: number;
+      rx: number;
+      ry: number;
+    }
+  | {
+      type: "line";
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+    };
+
+export function detectSmartShape(points: Point[]): SmartShape | null {
   if (points.length < 10) return null;
   const first = points[0];
   const last = points[points.length - 1];
@@ -37,7 +53,7 @@ export function detectSmartShape(points: Point[]) {
     const perimeter =
       2 * Math.PI * Math.sqrt((width * width + height * height) / 8);
     const ratio = pathLength / perimeter;
-    // Allow decent approximation for circles/ellipses
+    // Ребенок редко замыкает контур идеально, поэтому допускаем заметную погрешность.
     if (ratio > 0.8 && ratio < 1.4) {
       return {
         type: "ellipse",
@@ -49,7 +65,7 @@ export function detectSmartShape(points: Point[]) {
     }
   } else if (width > 20 || height > 20) {
     const straightDist = Math.hypot(last.x - first.x, last.y - first.y);
-    // Allow lines with a slight wiggle
+    // Небольшое дрожание руки не должно мешать превращать штрих в ровную линию.
     if (pathLength / straightDist < 1.15) {
       return { type: "line", x1: first.x, y1: first.y, x2: last.x, y2: last.y };
     }

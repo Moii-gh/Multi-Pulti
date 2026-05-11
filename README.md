@@ -43,7 +43,6 @@
 - HTML5 Canvas
 - gifenc
 - lucide-react
-- motion
 
 ## Быстрый старт
 
@@ -103,7 +102,6 @@ npm run preview
 │       └── shapeDetection.ts
 ├── assets
 │   ├── multi-pulti-banner.png
-│   └── multi-pulti-screenshot.png
 ├── index.html
 ├── package.json
 ├── render.yaml

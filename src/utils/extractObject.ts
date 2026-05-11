@@ -13,21 +13,19 @@ export function extractObject(
   
   if (startX < 0 || startX >= width || startY < 0 || startY >= height) return null;
 
-  const getPos = (x: number, y: number) => (y * width + x);
-  const getIdx = (x: number, y: number) => getPos(x, y) * 4;
+  const getPixelOffset = (x: number, y: number) => (y * width + x);
+  const getDataIndex = (x: number, y: number) => getPixelOffset(x, y) * 4;
 
-  const isEmpty = (idx: number) => {
-    // Transparent
-    if (data[idx + 3] === 0) return true;
-    // Almost white (to handle anti-aliasing)
-    if (data[idx] > 250 && data[idx + 1] > 250 && data[idx + 2] > 250) return true;
+  const isBackgroundPixel = (index: number) => {
+    if (data[index + 3] === 0) return true;
+    if (data[index] > 250 && data[index + 1] > 250 && data[index + 2] > 250) return true;
     return false;
   };
 
-  const startIdx = getIdx(startX, startY);
+  const startIndex = getDataIndex(startX, startY);
   
-  // Allow clicking slightly near an object by searching in a small radius first
-  if (isEmpty(startIdx)) {
+  // В режиме выбора дети часто нажимают рядом с контуром, поэтому сначала ищем ближайший нарисованный пиксель.
+  if (isBackgroundPixel(startIndex)) {
     let found = false;
     for (let r = 1; r <= 10; r++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -35,7 +33,7 @@ export function extractObject(
            const nx = startX + dx;
            const ny = startY + dy;
            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-             if (!isEmpty(getIdx(nx, ny))) {
+             if (!isBackgroundPixel(getDataIndex(nx, ny))) {
                startX = nx;
                startY = ny;
                found = true;
@@ -56,16 +54,15 @@ export function extractObject(
   let minX = startX, maxX = startX;
   let minY = startY, maxY = startY;
 
-  // We maintain a search queue for the flood fills to merge nearby components
+  // Один объект может состоять из нескольких близких компонентов, например букв в слове.
   const searchComponentsQueue: [number, number][] = [[startX, startY]];
 
   while (searchComponentsQueue.length > 0) {
     const [sx, sy] = searchComponentsQueue.pop()!;
-    if (visited[getPos(sx, sy)]) continue;
+    if (visited[getPixelOffset(sx, sy)]) continue;
 
-    // Run flood fill for a single connected component
     const stack = [sx, sy];
-    visited[getPos(sx, sy)] = 1;
+    visited[getPixelOffset(sx, sy)] = 1;
 
     let compMinX = sx, compMaxX = sx;
     let compMinY = sy, compMaxY = sy;
@@ -74,15 +71,14 @@ export function extractObject(
       const y = stack.pop()!;
       const x = stack.pop()!;
       
-      const pos = getPos(x, y);
-      objectPixels.push(pos);
+      const pixelOffset = getPixelOffset(x, y);
+      objectPixels.push(pixelOffset);
       
       if (x < compMinX) compMinX = x;
       if (x > compMaxX) compMaxX = x;
       if (y < compMinY) compMinY = y;
       if (y > compMaxY) compMaxY = y;
 
-      // 8-way connectivity
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dy === 0) continue;
@@ -90,10 +86,10 @@ export function extractObject(
           const ny = y + dy;
           
           if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-            const nPos = getPos(nx, ny);
-            if (!visited[nPos]) {
-              visited[nPos] = 1;
-              if (!isEmpty(nPos * 4)) {
+            const nextOffset = getPixelOffset(nx, ny);
+            if (!visited[nextOffset]) {
+              visited[nextOffset] = 1;
+              if (!isBackgroundPixel(nextOffset * 4)) {
                 stack.push(nx, ny);
               }
             }
@@ -102,24 +98,21 @@ export function extractObject(
       }
     }
 
-    // Update global bounds
     if (compMinX < minX) minX = compMinX;
     if (compMaxX > maxX) maxX = compMaxX;
     if (compMinY < minY) minY = compMinY;
     if (compMaxY > maxY) maxY = compMaxY;
 
-    // Search for nearby non-visited, non-empty pixels within a GAP radius
-    // This allows disjointed letters in a text block to be merged!
-    const GAP = 15; 
-    const searchMinX = Math.max(0, compMinX - GAP);
-    const searchMaxX = Math.min(width - 1, compMaxX + GAP);
-    const searchMinY = Math.max(0, compMinY - GAP);
-    const searchMaxY = Math.min(height - 1, compMaxY + GAP);
+    const nearbyComponentGap = 15;
+    const searchMinX = Math.max(0, compMinX - nearbyComponentGap);
+    const searchMaxX = Math.min(width - 1, compMaxX + nearbyComponentGap);
+    const searchMinY = Math.max(0, compMinY - nearbyComponentGap);
+    const searchMaxY = Math.min(height - 1, compMaxY + nearbyComponentGap);
 
     for (let y = searchMinY; y <= searchMaxY; y++) {
       for (let x = searchMinX; x <= searchMaxX; x++) {
-        const p = getPos(x, y);
-        if (!visited[p] && !isEmpty(p * 4)) {
+        const pixelOffset = getPixelOffset(x, y);
+        if (!visited[pixelOffset] && !isBackgroundPixel(pixelOffset * 4)) {
           searchComponentsQueue.push([x, y]);
         }
       }
@@ -129,38 +122,38 @@ export function extractObject(
   const objWidth = maxX - minX + 1;
   const objHeight = maxY - minY + 1;
 
-  const tempCanvas = document.createElement("canvas");
-  tempCanvas.width = objWidth;
-  tempCanvas.height = objHeight;
-  const tempCtx = tempCanvas.getContext("2d")!;
-  const tempImageData = tempCtx.createImageData(objWidth, objHeight);
+  const objectCanvas = document.createElement("canvas");
+  objectCanvas.width = objWidth;
+  objectCanvas.height = objHeight;
+  const objectCtx = objectCanvas.getContext("2d");
+  if (!objectCtx) return null;
+
+  const objectImageData = objectCtx.createImageData(objWidth, objHeight);
   
   for (let i = 0; i < objectPixels.length; i++) {
-    const p = objectPixels[i];
-    const px = p % width;
-    const py = Math.floor(p / width);
+    const pixelOffset = objectPixels[i];
+    const px = pixelOffset % width;
+    const py = Math.floor(pixelOffset / width);
     
-    const srcPos = p * 4;
-    const destPos = ((py - minY) * objWidth + (px - minX)) * 4;
+    const sourceIndex = pixelOffset * 4;
+    const targetIndex = ((py - minY) * objWidth + (px - minX)) * 4;
     
-    // Copy to temp
-    tempImageData.data[destPos] = data[srcPos];
-    tempImageData.data[destPos + 1] = data[srcPos + 1];
-    tempImageData.data[destPos + 2] = data[srcPos + 2];
-    tempImageData.data[destPos + 3] = data[srcPos + 3];
+    objectImageData.data[targetIndex] = data[sourceIndex];
+    objectImageData.data[targetIndex + 1] = data[sourceIndex + 1];
+    objectImageData.data[targetIndex + 2] = data[sourceIndex + 2];
+    objectImageData.data[targetIndex + 3] = data[sourceIndex + 3];
     
-    // Erase from main (make white)
-    data[srcPos] = 255;
-    data[srcPos + 1] = 255;
-    data[srcPos + 2] = 255;
-    data[srcPos + 3] = 255;
+    data[sourceIndex] = 255;
+    data[sourceIndex + 1] = 255;
+    data[sourceIndex + 2] = 255;
+    data[sourceIndex + 3] = 255;
   }
   
-  tempCtx.putImageData(tempImageData, 0, 0);
+  objectCtx.putImageData(objectImageData, 0, 0);
   ctx.putImageData(imageData, 0, 0);
 
   return {
-    canvas: tempCanvas,
+    canvas: objectCanvas,
     x: minX,
     y: minY,
     width: objWidth,

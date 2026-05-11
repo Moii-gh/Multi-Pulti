@@ -41,13 +41,14 @@
     display: none;
   }
   .no-scrollbar {
-    -ms-overflow-style: none;  /* IE and Edge */
-    scrollbar-width: none;  /* Firefox */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
 
 body {
   background-color: #f0f9ff;
   overflow: hidden;
-  touch-action: none; /* Prevent pull-to-refresh and scrolling on mobile */
+  /* Мобильный браузер не должен перехватывать жесты, пока ребенок рисует на холсте. */
+  touch-action: none;
 }

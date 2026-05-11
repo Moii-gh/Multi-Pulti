@@ -2,75 +2,75 @@ export function floodFill(ctx: CanvasRenderingContext2D, startX: number, startY:
   const canvas = ctx.canvas;
   const width = canvas.width;
   const height = canvas.height;
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
+
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
 
-  const startPos = (startY * width + startX) * 4;
-  const startR = data[startPos];
-  const startG = data[startPos + 1];
-  const startB = data[startPos + 2];
-  const startA = data[startPos + 3];
+  const startIndex = (startY * width + startX) * 4;
+  const startR = data[startIndex];
+  const startG = data[startIndex + 1];
+  const startB = data[startIndex + 2];
+  const startA = data[startIndex + 3];
 
-  const fillRgba = hexToRgba(fillColorHex);
-  if (!fillRgba) return;
+  const fillColor = hexToRgba(fillColorHex);
+  if (!fillColor) return;
 
-  // Set a tolerance for color matching to handle anti-aliasing artifacts
-  const tolerance = 64; 
+  // Без допуска заливка цепляется за отдельные пиксели сглаживания и оставляет грязную кайму.
+  const tolerance = 64;
 
-  // Fast check: If start color is very close to fill color, don't fill
-  if (Math.abs(startR - fillRgba.r) <= tolerance &&
-      Math.abs(startG - fillRgba.g) <= tolerance &&
-      Math.abs(startB - fillRgba.b) <= tolerance &&
-      Math.abs(startA - fillRgba.a) <= tolerance) {
+  if (Math.abs(startR - fillColor.r) <= tolerance &&
+      Math.abs(startG - fillColor.g) <= tolerance &&
+      Math.abs(startB - fillColor.b) <= tolerance &&
+      Math.abs(startA - fillColor.a) <= tolerance) {
     return;
   }
 
-  const matchColor = (pos: number) => {
-    const r = data[pos];
-    const g = data[pos + 1];
-    const b = data[pos + 2];
-    const a = data[pos + 3];
+  const matchesStartColor = (index: number) => {
+    const r = data[index];
+    const g = data[index + 1];
+    const b = data[index + 2];
+    const a = data[index + 3];
     
-    // Check if the current pixel color is within tolerance of the starting color
     return Math.abs(r - startR) <= tolerance &&
            Math.abs(g - startG) <= tolerance &&
            Math.abs(b - startB) <= tolerance &&
            Math.abs(a - startA) <= tolerance;
   };
 
-  const colorPixel = (pos: number) => {
-    data[pos] = fillRgba.r;
-    data[pos + 1] = fillRgba.g;
-    data[pos + 2] = fillRgba.b;
-    data[pos + 3] = fillRgba.a;
+  const fillPixel = (index: number) => {
+    data[index] = fillColor.r;
+    data[index + 1] = fillColor.g;
+    data[index + 2] = fillColor.b;
+    data[index + 3] = fillColor.a;
   };
 
   const stack = [startX, startY];
   let reachLeft, reachRight;
   
-  // Use a scanline approach for much faster and cleaner filling
+  // Построчная заливка не раздувает стек на больших областях и заметно быстрее обхода по одному пикселю.
   while (stack.length > 0) {
     let y = stack.pop()!;
     let x = stack.pop()!;
 
-    let pos = (y * width + x) * 4;
+    let index = (y * width + x) * 4;
 
-    while (y >= 0 && matchColor(pos)) {
+    while (y >= 0 && matchesStartColor(index)) {
       y--;
-      pos -= width * 4;
+      index -= width * 4;
     }
     
-    pos += width * 4;
+    index += width * 4;
     y++;
     
     reachLeft = false;
     reachRight = false;
     
-    while (y < height && matchColor(pos)) {
-      colorPixel(pos);
+    while (y < height && matchesStartColor(index)) {
+      fillPixel(index);
       
       if (x > 0) {
-        if (matchColor(pos - 4)) {
+        if (matchesStartColor(index - 4)) {
           if (!reachLeft) {
             stack.push(x - 1, y);
             reachLeft = true;
@@ -81,7 +81,7 @@ export function floodFill(ctx: CanvasRenderingContext2D, startX: number, startY:
       }
       
       if (x < width - 1) {
-        if (matchColor(pos + 4)) {
+        if (matchesStartColor(index + 4)) {
           if (!reachRight) {
             stack.push(x + 1, y);
             reachRight = true;
@@ -92,7 +92,7 @@ export function floodFill(ctx: CanvasRenderingContext2D, startX: number, startY:
       }
       
       y++;
-      pos += width * 4;
+      index += width * 4;
     }
   }
 

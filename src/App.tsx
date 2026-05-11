@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   Pen,
   Eraser,
@@ -15,7 +15,6 @@ import {
   Trash,
   Save,
   Image as ImageIcon,
-  Film,
   Download,
   Smile,
   Check,
@@ -32,7 +31,7 @@ import {
 import { cn } from "./utils/cn";
 import { floodFill } from "./utils/floodFill";
 import { extractObject } from "./utils/extractObject";
-import { detectSmartShape } from "./utils/shapeDetection";
+import { detectSmartShape, type Point, type SmartShape } from "./utils/shapeDetection";
 import { exportToGif } from "./utils/gifExport";
 import { playPop, playSwoosh, playAction, playError } from "./utils/audio";
 import { analyzeFrame } from "./utils/contentFilter";
@@ -48,8 +47,52 @@ interface PlacedText {
   color: string;
 }
 
+interface FrameHistoryEntry {
+  frames: string[];
+}
+
+interface StoredAppState {
+  history: FrameHistoryEntry[];
+  historyIndex: number;
+  currentFrame: number;
+  recentColors: string[];
+  favoriteColors: string[];
+}
+
+interface ActiveSelection {
+  canvas: HTMLCanvasElement;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+type ToolId =
+  | "select"
+  | "brush"
+  | "eraser"
+  | "fill"
+  | "pipette"
+  | "line"
+  | "circle"
+  | "rect"
+  | "text"
+  | "sticker";
+
+interface ToolOption {
+  id: ToolId;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+}
+
+interface CanvasClientPosition {
+  clientX: number;
+  clientY: number;
+}
+
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
+const LOGO_URL = new URL("../assets/MultiPulit-Logo.png", import.meta.url).href;
 
 const BASIC_COLORS = [
   { hex: "#000000", name: "Чёрный" },
@@ -96,7 +139,7 @@ const BRUSH_SIZES = [
   { id: "large", size: 30, label: "Толсто" },
 ];
 
-const TOOLS = [
+const TOOLS: ToolOption[] = [
   { id: "select", icon: MousePointer2, label: "Переместить" },
   { id: "brush", icon: Pen, label: "Кисть" },
   { id: "eraser", icon: Eraser, label: "Ластик" },
@@ -169,6 +212,9 @@ const FPS_OPTIONS = [
   { id: "fast", fps: 12, label: "🚀 Быстро" },
 ];
 
+const AVAILABLE_FONTS = ["Nunito", "Caveat", "Comfortaa", "Mali"] as const;
+type FontName = (typeof AVAILABLE_FONTS)[number];
+
 const TEMPLATES = [
   {
     id: "cat",
@@ -190,9 +236,19 @@ const TEMPLATES = [
   },
 ];
 
+const CENSOR_WARNING_MESSAGES = [
+  "🚫 Ой! Давай рисовать что-нибудь красивое!",
+  "🎨 Попробуй нарисовать что-то доброе!",
+  "🌈 Используй больше ярких цветов!",
+  "✨ Давай создадим что-то волшебное!",
+  "🌸 Рисуй красиво — мир станет лучше!",
+];
+
+const PRAISE_MESSAGES = ["Супер!", "Класс!", "Отлично!", "Красота!", "Волшебно!"];
+
 const drawSmoothedCurve = (
   ctx: CanvasRenderingContext2D,
-  points: { x: number; y: number }[],
+  points: Point[],
   color: string,
   size: number,
   symmetry: boolean,
@@ -239,7 +295,7 @@ const drawSmoothedCurve = (
 
 const drawPerfectShape = (
   ctx: CanvasRenderingContext2D,
-  shape: any,
+  shape: SmartShape,
   color: string,
   size: number,
   symmetry: boolean,
@@ -274,23 +330,64 @@ const getBlankCanvas = () => {
   return c.toDataURL("image/png");
 };
 
-const getInitialState = () => {
+const isFrameHistoryEntry = (value: unknown): value is FrameHistoryEntry => {
+  if (typeof value !== "object" || value === null) return false;
+  const { frames } = value as { frames?: unknown };
+  return (
+    Array.isArray(frames) &&
+    frames.length > 0 &&
+    frames.every((frame) => typeof frame === "string")
+  );
+};
+
+const clampIndex = (value: unknown, maxIndex: number) => {
+  return typeof value === "number" && Number.isInteger(value)
+    ? Math.min(Math.max(value, 0), maxIndex)
+    : 0;
+};
+
+const getInitialState = (): StoredAppState | null => {
   try {
     const saved = localStorage.getItem("multipulti_state");
     if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed?.history?.length > 0) {
-        return parsed;
-      }
+      const parsed = JSON.parse(saved) as unknown;
+      if (typeof parsed !== "object" || parsed === null) return null;
+
+      // Состояние в localStorage могло остаться от старой версии, поэтому нормализуем индексы и списки.
+      const rawState = parsed as Partial<StoredAppState>;
+      const history = Array.isArray(rawState.history)
+        ? rawState.history.filter(isFrameHistoryEntry)
+        : [];
+      if (history.length === 0) return null;
+
+      const historyIndex = clampIndex(rawState.historyIndex, history.length - 1);
+      const currentFrame = clampIndex(
+        rawState.currentFrame,
+        history[historyIndex].frames.length - 1,
+      );
+
+      return {
+        history,
+        historyIndex,
+        currentFrame,
+        recentColors: Array.isArray(rawState.recentColors)
+          ? rawState.recentColors.filter((item): item is string => typeof item === "string")
+          : [],
+        favoriteColors: Array.isArray(rawState.favoriteColors)
+          ? rawState.favoriteColors.filter((item): item is string => typeof item === "string")
+          : [],
+      };
     }
-  } catch (e) {}
+  } catch {
+    return null;
+  }
   return null;
 };
 
 export default function App() {
   const [initialState] = useState(getInitialState);
 
-  const [history, setHistory] = useState<{ frames: string[] }[]>(
+  const [history, setHistory] = useState<FrameHistoryEntry[]>(
     initialState?.history || [{ frames: [getBlankCanvas()] }],
   );
   const [historyIndex, setHistoryIndex] = useState(
@@ -300,7 +397,7 @@ export default function App() {
     initialState?.currentFrame ?? 0,
   );
 
-  const [tool, setTool] = useState("brush");
+  const [tool, setTool] = useState<ToolId>("brush");
   const [color, setColor] = useState(BASIC_COLORS[0].hex);
   const [brushSize, setBrushSize] = useState(BRUSH_SIZES[1].size);
 
@@ -329,7 +426,6 @@ export default function App() {
   const [selectedSticker, setSelectedSticker] = useState<string>("⭐");
   const [showStickerPanel, setShowStickerPanel] = useState(false);
 
-  // Text Mode State
   const [activeText, setActiveText] = useState<{
     text: string;
     x: number;
@@ -339,7 +435,7 @@ export default function App() {
     color: string;
     isEditing: boolean;
   } | null>(null);
-  const [selectedFont, setSelectedFont] = useState<string>("Nunito");
+  const [selectedFont, setSelectedFont] = useState<FontName>("Nunito");
   const [textInput, setTextInput] = useState("");
   const textInputRef = useRef<HTMLInputElement>(null);
 
@@ -350,11 +446,12 @@ export default function App() {
   const [feedback, setFeedback] = useState<{ text: string; id: number } | null>(
     null,
   );
-  const [censorWarning, setCensorWarning] = useState<{ text: string; id: number } | null>(
-    null,
-  );
+  const [censorWarning, setCensorWarning] = useState<{
+    text: string;
+    id: number;
+  } | null>(null);
   const censorCooldownRef = useRef(false);
-  const pointsRef = useRef<{ x: number; y: number }[]>([]);
+  const pointsRef = useRef<Point[]>([]);
 
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -370,13 +467,7 @@ export default function App() {
   const isMovingTextRef = useRef(false);
   const initialTextPosRef = useRef({ x: 0, y: 0 });
 
-  const [activeSelection, setActiveSelection] = useState<{
-    canvas: HTMLCanvasElement;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  } | null>(null);
+  const [activeSelection, setActiveSelection] = useState<ActiveSelection | null>(null);
 
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -393,15 +484,23 @@ export default function App() {
 
   const frames = history[historyIndex].frames;
 
+  const clearOverlayCanvas = useCallback(() => {
+    const overlayCanvas = overlayCanvasRef.current;
+    const overlayCtx = overlayCanvas?.getContext("2d");
+    if (!overlayCanvas || !overlayCtx) return;
+
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  }, []);
+
   const handleDragStart = (e: React.DragEvent, idx: number) => {
     setDraggedFrameIdx(idx);
     e.dataTransfer.effectAllowed = "move";
-    // Firefox requires some data to be set for drag to work
+    // Firefox не запускает drag-and-drop без данных, даже если они не нужны приложению.
     e.dataTransfer.setData("text/plain", idx.toString());
   };
 
-  const handleDragOver = (e: React.DragEvent, idx: number) => {
-    e.preventDefault(); // Necessary to allow dropping
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   };
 
@@ -441,7 +540,7 @@ export default function App() {
       localStorage.setItem("multipulti_state", JSON.stringify(stateToSave));
     } catch (e) {
       console.warn(
-        "Failed to save state to localStorage (might be too large)",
+        "Не удалось сохранить полное состояние в localStorage, пробуем сохранить только текущий кадр",
         e,
       );
       try {
@@ -454,12 +553,11 @@ export default function App() {
         };
         localStorage.setItem("multipulti_state", JSON.stringify(minimalState));
       } catch (e2) {
-        console.error("Even minimal state is too large", e2);
+        console.error("Даже минимальное состояние не помещается в localStorage", e2);
       }
     }
   }, [history, historyIndex, currentFrame, favoriteColors, recentColors]);
 
-  // Save state to history
   const saveState = useCallback(
     (newFrames: string[]) => {
       const newHistory = history.slice(0, historyIndex + 1);
@@ -471,21 +569,26 @@ export default function App() {
     [history, historyIndex],
   );
 
-  // Цензура: проверка кадра после сохранения
-  // Удаляет кадр целиком и стирает историю, чтобы «Назад» не вернул плохой рисунок
+  const saveCanvasSnapshot = useCallback(
+    (canvas: HTMLCanvasElement) => {
+      const newFrames = [...frames];
+      newFrames[currentFrame] = canvas.toDataURL("image/png");
+      saveState(newFrames);
+    },
+    [frames, currentFrame, saveState],
+  );
+
   const runCensorCheck = useCallback(() => {
     if (censorCooldownRef.current) return;
     const mainCanvas = mainCanvasRef.current;
     if (!mainCanvas) return;
 
-    // Запуск анализа
     const result = analyzeFrame(mainCanvas);
     if (result.blocked) {
       censorCooldownRef.current = true;
 
       playError();
 
-      // Берём текущие кадры из последнего состояния истории
       setHistory((prevHistory) => {
         const latestFrames = prevHistory[prevHistory.length - 1]?.frames || [getBlankCanvas()];
 
@@ -493,23 +596,19 @@ export default function App() {
         let newFrameIdx: number;
 
         if (latestFrames.length <= 1) {
-          // Единственный кадр — просто очищаем его
           cleanFrames = [getBlankCanvas()];
           newFrameIdx = 0;
         } else {
-          // Удаляем текущий кадр
           cleanFrames = latestFrames.filter((_, i) => i !== currentFrame);
           newFrameIdx = Math.min(currentFrame, cleanFrames.length - 1);
         }
 
-        // Перезаписываем всю историю одним чистым состоянием,
-        // чтобы «Назад» не вернул удалённый кадр
+        // Переписываем историю, чтобы отмена не вернула кадр, который фильтр уже заблокировал.
         const freshHistory = [{ frames: cleanFrames }];
 
         setCurrentFrame(newFrameIdx);
         setHistoryIndex(0);
 
-        // Перерисовать канвас на новый текущий кадр
         const ctx = mainCanvas.getContext("2d", { willReadFrequently: true });
         if (ctx) {
           const img = new Image();
@@ -523,15 +622,8 @@ export default function App() {
         return freshHistory;
       });
 
-      const warningMsgs = [
-        "🚫 Ой! Давай рисовать что-нибудь красивое!",
-        "🎨 Попробуй нарисовать что-то доброе!",
-        "🌈 Используй больше ярких цветов!",
-        "✨ Давай создадим что-то волшебное!",
-        "🌸 Рисуй красиво — мир станет лучше!",
-      ];
       setCensorWarning({
-        text: warningMsgs[Math.floor(Math.random() * warningMsgs.length)],
+        text: CENSOR_WARNING_MESSAGES[Math.floor(Math.random() * CENSOR_WARNING_MESSAGES.length)],
         id: Date.now(),
       });
       setTimeout(() => setCensorWarning(null), 3500);
@@ -550,19 +642,12 @@ export default function App() {
     mainCtx.textBaseline = "middle";
     mainCtx.fillText(activeSticker.emoji, activeSticker.x, activeSticker.y);
 
-    const newFrames = [...frames];
-    newFrames[currentFrame] = mainCanvas.toDataURL("image/png");
-    saveState(newFrames);
+    saveCanvasSnapshot(mainCanvas);
 
     setActiveSticker(null);
-
-    const overlayCanvas = overlayCanvasRef.current;
-    const overlayCtx = overlayCanvas?.getContext("2d");
-    if (overlayCtx && overlayCanvas) {
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    }
+    clearOverlayCanvas();
     playPop();
-  }, [activeSticker, frames, currentFrame, saveState]);
+  }, [activeSticker, clearOverlayCanvas, saveCanvasSnapshot]);
 
   const finalizeText = useCallback(() => {
     if (!activeText || activeText.text.trim() === "") {
@@ -594,20 +679,13 @@ export default function App() {
       },
     ]);
 
-    const newFrames = [...frames];
-    newFrames[currentFrame] = mainCanvas.toDataURL("image/png");
-    saveState(newFrames);
+    saveCanvasSnapshot(mainCanvas);
 
     setActiveText(null);
     setTextInput("");
-
-    const overlayCanvas = overlayCanvasRef.current;
-    const overlayCtx = overlayCanvas?.getContext("2d");
-    if (overlayCtx && overlayCanvas) {
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    }
+    clearOverlayCanvas();
     playPop();
-  }, [activeText, frames, currentFrame, saveState]);
+  }, [activeText, clearOverlayCanvas, saveCanvasSnapshot]);
 
   const finalizeSelection = useCallback(() => {
     if (!activeSelection) return;
@@ -623,29 +701,18 @@ export default function App() {
       activeSelection.height
     );
 
-    const newFrames = [...frames];
-    newFrames[currentFrame] = mainCanvas.toDataURL("image/png");
-    saveState(newFrames);
+    saveCanvasSnapshot(mainCanvas);
 
     setActiveSelection(null);
-
-    const overlayCanvas = overlayCanvasRef.current;
-    const overlayCtx = overlayCanvas?.getContext("2d");
-    if (overlayCtx && overlayCanvas) {
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    }
+    clearOverlayCanvas();
     playPop();
-  }, [activeSelection, frames, currentFrame, saveState]);
+  }, [activeSelection, clearOverlayCanvas, saveCanvasSnapshot]);
 
   const cancelSticker = useCallback(() => {
     setActiveSticker(null);
-    const overlayCanvas = overlayCanvasRef.current;
-    const overlayCtx = overlayCanvas?.getContext("2d");
-    if (overlayCtx && overlayCanvas) {
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    }
+    clearOverlayCanvas();
     playPop();
-  }, []);
+  }, [clearOverlayCanvas]);
 
   const handleSetTool = useCallback(
     (newTool: string) => {
@@ -694,7 +761,6 @@ export default function App() {
     playPop();
   }, [activeSelection, color]);
 
-  // Redraw main canvas when frame changes or history changes
   useEffect(() => {
     if (isDrawingRef.current) return;
     const canvas = mainCanvasRef.current;
@@ -709,7 +775,6 @@ export default function App() {
     img.src = frames[currentFrame] || getBlankCanvas();
   }, [frames, currentFrame]);
 
-  // Playback loop
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isPlaying) {
@@ -727,7 +792,6 @@ export default function App() {
     const dx = (activeSelection.width - newW) / 2;
     const dy = (activeSelection.height - newH) / 2;
     
-    // Limits
     if (newW < 10 || newH < 10 || newW > CANVAS_WIDTH * 2 || newH > CANVAS_HEIGHT * 2) return;
 
     setActiveSelection({
@@ -777,7 +841,7 @@ export default function App() {
     if (!silent) playPop();
   }, [activeSelection]);
 
-  const getCoordinates = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const getCoordinates = (e: CanvasClientPosition) => {
     const canvas = mainCanvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
@@ -806,7 +870,7 @@ export default function App() {
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (isPlaying) return;
-    if (e.button === 2) return; // Ignore right click in pointer down. We handle it in onContextMenu
+    if (e.button === 2) return;
     const { x, y } = getCoordinates(e);
     const mainCanvas = mainCanvasRef.current;
     const mainCtx = mainCanvas?.getContext("2d", { willReadFrequently: true });
@@ -850,20 +914,17 @@ export default function App() {
         }
       }
 
-      // Try to extract an object from the canvas
-      const extObj = extractObject(mainCtx, x, y);
-      if (extObj) {
-        setActiveSelection(extObj);
+      const extractedObject = extractObject(mainCtx, x, y);
+      if (extractedObject) {
+        setActiveSelection(extractedObject);
         isMovingSelectionRef.current = true;
         startPosRef.current = { x, y };
         initialSelectionPosRef.current = {
-          x: extObj.x,
-          y: extObj.y,
+          x: extractedObject.x,
+          y: extractedObject.y,
         };
 
-        const newFrames = [...frames];
-        newFrames[currentFrame] = mainCanvas.toDataURL("image/png");
-        saveState(newFrames);
+        saveCanvasSnapshot(mainCanvas);
         playPop();
       }
       return;
@@ -931,7 +992,7 @@ export default function App() {
             const halfWidth = metrics.width / 2;
             const halfHeight = activeText.size / 2;
 
-            // Expand hit area slightly
+            // Даем небольшой запас, чтобы текст было проще схватить пальцем.
             if (
               Math.abs(x - activeText.x) < halfWidth + 20 &&
               Math.abs(y - activeText.y) < halfHeight + 20
@@ -969,10 +1030,7 @@ export default function App() {
     if (tool === "fill") {
       playAction();
       floodFill(mainCtx, Math.floor(x), Math.floor(y), color);
-      const newFrames = [...frames];
-      newFrames[currentFrame] = mainCanvas.toDataURL("image/png");
-      saveState(newFrames);
-      // Проверка цензуры после заливки
+      saveCanvasSnapshot(mainCanvas);
       setTimeout(() => runCensorCheck(), 100);
       return;
     }
@@ -1112,7 +1170,6 @@ export default function App() {
       return;
     }
 
-    // Shapes
     overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
     overlayCtx.lineCap = "round";
     overlayCtx.lineJoin = "round";
@@ -1187,17 +1244,13 @@ export default function App() {
       mainCtx.drawImage(overlayCanvas, 0, 0);
       overlayCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-      const newFrames = [...frames];
-      newFrames[currentFrame] = mainCanvas.toDataURL("image/png");
-      saveState(newFrames);
+      saveCanvasSnapshot(mainCanvas);
 
-      // Проверка цензуры после отрисовки
       setTimeout(() => runCensorCheck(), 100);
 
       if (assistMode && pointsRef.current.length > 20 && Math.random() > 0.5) {
-        const msgs = ["Супер!", "Класс!", "Отлично!", "Красота!", "Волшебно!"];
         setFeedback({
-          text: msgs[Math.floor(Math.random() * msgs.length)],
+          text: PRAISE_MESSAGES[Math.floor(Math.random() * PRAISE_MESSAGES.length)],
           id: Date.now(),
         });
         setTimeout(() => setFeedback(null), 2000);
@@ -1206,9 +1259,7 @@ export default function App() {
     }
 
     if (tool === "eraser") {
-      const newFrames2 = [...frames];
-      newFrames2[currentFrame] = mainCanvas.toDataURL("image/png");
-      saveState(newFrames2);
+      saveCanvasSnapshot(mainCanvas);
       return;
     }
 
@@ -1217,11 +1268,8 @@ export default function App() {
       overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
     }
 
-    const newFrames3 = [...frames];
-    newFrames3[currentFrame] = mainCanvas.toDataURL("image/png");
-    saveState(newFrames3);
+    saveCanvasSnapshot(mainCanvas);
 
-    // Проверка цензуры для линий/фигур
     setTimeout(() => runCensorCheck(), 100);
   };
 
@@ -1320,7 +1368,6 @@ export default function App() {
     }
   }, [activeSticker, activeText, tool, activeSelection]);
 
-  // Timeline actions
   const addFrame = () => {
     playPop();
     const newFrames = [...frames];
@@ -1357,7 +1404,6 @@ export default function App() {
     setPlacedTexts([]);
   };
 
-  // File actions
   const savePng = () => {
     playAction();
     const link = document.createElement("a");
@@ -1416,7 +1462,7 @@ export default function App() {
 
   const handleContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    const { x, y } = getCoordinates(e as any);
+    const { x, y } = getCoordinates(e);
 
     if (tool === "select" && activeSelection) {
       if (
@@ -1458,12 +1504,13 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-blue-50 font-sans text-gray-800">
-      {/* Top Menu */}
       <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between px-4 shrink-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
-          <div className="w-10 h-10 bg-yellow-400 rounded-full border-4 border-black flex items-center justify-center">
-            <Film className="w-5 h-5 text-black" />
-          </div>
+          <img
+            src={LOGO_URL}
+            alt="Мульти-Пульти"
+            className="h-12 w-12 rounded-2xl border-4 border-black object-cover shadow-sm"
+          />
           <h1
             className="text-xl font-black tracking-wider text-black uppercase hidden sm:block"
             style={{ WebkitTextStroke: "1px white" }}
@@ -1545,9 +1592,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Area */}
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Left Toolbar (Tools only) */}
         <aside className="w-[72px] sm:w-[88px] bg-white flex flex-col items-center py-4 gap-2 overflow-y-auto no-scrollbar shrink-0 z-30 hover:z-40">
           <div className="flex flex-col gap-2 w-full px-2">
             {TOOLS.map((t) => (
@@ -1572,7 +1617,6 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Secondary Toolbar (Contextual Properties) */}
         <aside className="w-48 sm:w-60 bg-blue-50/50 flex flex-col pt-0 pb-6 overflow-y-auto no-scrollbar shrink-0 z-20 transition-all duration-300">
           <div className="bg-white py-4 px-4 border-b-4 border-black mb-4 sticky top-0 z-10 shadow-sm flex items-center justify-center">
             <span className="font-black text-lg sm:text-lg uppercase tracking-wider text-black">
@@ -1581,7 +1625,6 @@ export default function App() {
           </div>
 
           <div className="flex flex-col gap-6 px-3">
-            {/* Select Properties */}
             {tool === "select" && (
               <div className="flex flex-col gap-6">
                 {!activeSelection && !activeText ? (
@@ -1632,7 +1675,6 @@ export default function App() {
                         Перекрасить (Свой цвет)
                       </div>
                       
-                      {/* Hue Slider for Select mode */}
                       <div className="w-full px-2 mb-2">
                         <input
                           type="range"
@@ -1718,7 +1760,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Brush Sizes */}
             {["brush", "eraser", "line", "circle", "rect"].includes(tool) && (
               <div className="flex flex-col gap-3">
                 <div className="text-[10px] font-bold text-gray-400 text-center uppercase tracking-wider">
@@ -1748,7 +1789,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Fonts */}
             {(tool === "text" || (tool === "select" && activeText)) && (
               <div className="flex flex-col gap-3">
                 <div className="text-[10px] sm:text-[10px] font-bold text-gray-400 text-center uppercase tracking-wider">
@@ -1772,7 +1812,7 @@ export default function App() {
                   Шрифт
                 </div>
                 <div className="flex flex-col gap-2">
-                  {["Nunito", "Caveat", "Comfortaa", "Mali"].map((font) => (
+                  {AVAILABLE_FONTS.map((font) => (
                     <button
                       key={font}
                       className={cn(
@@ -1796,7 +1836,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Magic */}
             {["brush", "eraser"].includes(tool) && (
               <div className="flex flex-col gap-3">
                 <div className="text-[10px] font-bold text-gray-400 text-center uppercase tracking-wider">
@@ -1864,7 +1903,6 @@ export default function App() {
               <hr className="border-2 border-gray-200 rounded-full opacity-50" />
             )}
 
-            {/* Colors */}
             {(["brush", "fill", "line", "circle", "rect", "text"].includes(tool) || (tool === "select" && activeText)) && (
               <div className="flex flex-col gap-3 items-center">
                 <div className="text-[10px] font-bold text-gray-400 text-center uppercase tracking-wider">
@@ -1912,7 +1950,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Sticker */}
             {tool === "sticker" && (
               <div className="flex flex-col items-center gap-3">
                 <div className="text-[10px] font-bold text-gray-400 text-center uppercase tracking-wider">
@@ -1952,7 +1989,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Pipette */}
             {tool === "pipette" && (
               <div className="flex flex-col items-center text-center gap-4 text-gray-600 pt-4">
                 <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center text-blue-500 shadow-inner">
@@ -1966,7 +2002,6 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Canvas Area */}
         <main className="flex-1 flex items-center justify-center bg-gray-200 p-4 sm:p-8 overflow-hidden relative">
           <div
             className="relative bg-white border-8 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,0.2)] overflow-hidden w-full max-w-4xl"
@@ -2035,7 +2070,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Предупреждение цензуры */}
             {censorWarning && (
               <div
                 key={censorWarning.id}
@@ -2060,7 +2094,6 @@ export default function App() {
         </main>
       </div>
 
-      {/* Bottom Timeline */}
       <footer className="h-40 bg-white border-t-4 border-black p-4 flex flex-col gap-2 shrink-0 z-10">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -2136,14 +2169,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* Frames List */}
         <div className="flex-1 flex items-center gap-3 overflow-x-auto pb-2 px-2 snap-x">
           {frames.map((frame, idx) => (
             <div
               key={idx}
               draggable={!isPlaying}
               onDragStart={(e) => handleDragStart(e, idx)}
-              onDragOver={(e) => handleDragOver(e, idx)}
+              onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, idx)}
               onDragEnd={handleDragEnd}
               className={cn(
@@ -2181,7 +2213,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Templates Panel Modal */}
       {showTemplatesPanel && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-6 w-full max-w-2xl border-8 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col">
@@ -2241,7 +2272,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Sticker Panel Modal */}
       {showStickerPanel && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-6 w-full max-w-2xl border-8 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col max-h-[80vh]">
@@ -2288,7 +2318,6 @@ export default function App() {
           </div>
         </div>
       )}
-      {/* Color Palette Modal */}
       {showColorModal && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-6 w-full max-w-3xl border-8 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] flex flex-col max-h-[90vh]">
@@ -2305,9 +2334,7 @@ export default function App() {
             </div>
 
             <div className="flex flex-col md:flex-row gap-6 overflow-y-auto pr-2">
-              {/* Left side: Basic, Recent, Favorites */}
               <div className="flex-1 flex flex-col gap-6">
-                {/* Current Color & Favorite toggle */}
                 <div className="flex items-center gap-4 bg-gray-100 p-4 rounded-2xl border-4 border-gray-200">
                   <div
                     className="w-16 h-16 rounded-full border-4 border-black shadow-md"
@@ -2335,7 +2362,6 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Favorites */}
                 {favoriteColors.length > 0 && (
                   <div>
                     <h3 className="text-lg font-bold mb-3 flex items-center gap-2 text-gray-700">
@@ -2358,7 +2384,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Recent */}
                 {recentColors.length > 0 && (
                   <div>
                     <h3 className="text-lg font-bold mb-3 text-gray-700">
@@ -2380,7 +2405,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Basic Colors */}
                 <div>
                   <h3 className="text-lg font-bold mb-3 text-gray-700">
                     Основные
@@ -2402,13 +2426,11 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right side: Custom Color Picker */}
               <div className="flex-1 flex flex-col gap-4 bg-blue-50 p-6 rounded-3xl border-4 border-blue-200">
                 <h3 className="text-xl font-bold text-center text-blue-800">
                   Создать свой цвет
                 </h3>
 
-                {/* Color Square */}
                 <div
                   ref={colorSquareRef}
                   className="w-full aspect-square rounded-2xl border-4 border-black relative touch-none cursor-crosshair overflow-hidden shadow-inner"
@@ -2457,7 +2479,6 @@ export default function App() {
                     }
                   }}
                 >
-                  {/* Saturation gradient (white to transparent) */}
                   <div
                     className="absolute inset-0"
                     style={{
@@ -2465,7 +2486,6 @@ export default function App() {
                         "linear-gradient(to right, #fff, transparent)",
                     }}
                   />
-                  {/* Value gradient (transparent to black) */}
                   <div
                     className="absolute inset-0"
                     style={{
@@ -2473,7 +2493,6 @@ export default function App() {
                     }}
                   />
 
-                  {/* Picker Handle */}
                   <div
                     className="absolute w-6 h-6 border-4 border-white rounded-full shadow-[0_0_4px_rgba(0,0,0,0.5)] -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                     style={{
@@ -2488,7 +2507,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* Hue Slider */}
                 <div className="flex flex-col gap-2 mt-2">
                   <label className="text-sm font-bold text-gray-600 uppercase tracking-wider">
                     Радуга
@@ -2525,7 +2543,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Context Menu */}
       {contextMenu && (
         <div
           className="fixed z-50 bg-white border-4 border-black rounded-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] overflow-hidden flex flex-col"
