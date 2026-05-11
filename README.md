@@ -9,7 +9,7 @@
 </div>
 
 <p align="center">
-  <img src="assets/multi-pulti-screenshot.png" alt="Интерфейс приложения Мульти-Пульти" width="100%">
+  <img src="assets/multi-pulti-banner.png" alt="Баннер проекта Мульти-Пульти" width="100%">
 </p>
 
 ## О проекте
@@ -102,6 +102,7 @@ npm run preview
 │       ├── gifExport.ts
 │       └── shapeDetection.ts
 ├── assets
+│   ├── multi-pulti-banner.png
 │   └── multi-pulti-screenshot.png
 ├── index.html
 ├── package.json
