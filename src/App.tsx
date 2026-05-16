@@ -34,7 +34,7 @@ import { extractObject } from "./utils/extractObject";
 import { detectSmartShape, type Point, type SmartShape } from "./utils/shapeDetection";
 import { exportToGif } from "./utils/gifExport";
 import { playPop, playSwoosh, playAction, playError } from "./utils/audio";
-import { analyzeFrame } from "./utils/contentFilter";
+
 
 interface PlacedText {
   id: number;
@@ -236,13 +236,7 @@ const TEMPLATES = [
   },
 ];
 
-const CENSOR_WARNING_MESSAGES = [
-  "🚫 Ой! Давай рисовать что-нибудь красивое!",
-  "🎨 Попробуй нарисовать что-то доброе!",
-  "🌈 Используй больше ярких цветов!",
-  "✨ Давай создадим что-то волшебное!",
-  "🌸 Рисуй красиво — мир станет лучше!",
-];
+
 
 const PRAISE_MESSAGES = ["Супер!", "Класс!", "Отлично!", "Красота!", "Волшебно!"];
 
@@ -446,11 +440,7 @@ export default function App() {
   const [feedback, setFeedback] = useState<{ text: string; id: number } | null>(
     null,
   );
-  const [censorWarning, setCensorWarning] = useState<{
-    text: string;
-    id: number;
-  } | null>(null);
-  const censorCooldownRef = useRef(false);
+
   const pointsRef = useRef<Point[]>([]);
 
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -578,58 +568,7 @@ export default function App() {
     [frames, currentFrame, saveState],
   );
 
-  const runCensorCheck = useCallback(() => {
-    if (censorCooldownRef.current) return;
-    const mainCanvas = mainCanvasRef.current;
-    if (!mainCanvas) return;
 
-    const result = analyzeFrame(mainCanvas);
-    if (result.blocked) {
-      censorCooldownRef.current = true;
-
-      playError();
-
-      setHistory((prevHistory) => {
-        const latestFrames = prevHistory[prevHistory.length - 1]?.frames || [getBlankCanvas()];
-
-        let cleanFrames: string[];
-        let newFrameIdx: number;
-
-        if (latestFrames.length <= 1) {
-          cleanFrames = [getBlankCanvas()];
-          newFrameIdx = 0;
-        } else {
-          cleanFrames = latestFrames.filter((_, i) => i !== currentFrame);
-          newFrameIdx = Math.min(currentFrame, cleanFrames.length - 1);
-        }
-
-        // Переписываем историю, чтобы отмена не вернула кадр, который фильтр уже заблокировал.
-        const freshHistory = [{ frames: cleanFrames }];
-
-        setCurrentFrame(newFrameIdx);
-        setHistoryIndex(0);
-
-        const ctx = mainCanvas.getContext("2d", { willReadFrequently: true });
-        if (ctx) {
-          const img = new Image();
-          img.onload = () => {
-            ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
-            ctx.drawImage(img, 0, 0);
-          };
-          img.src = cleanFrames[newFrameIdx];
-        }
-
-        return freshHistory;
-      });
-
-      setCensorWarning({
-        text: CENSOR_WARNING_MESSAGES[Math.floor(Math.random() * CENSOR_WARNING_MESSAGES.length)],
-        id: Date.now(),
-      });
-      setTimeout(() => setCensorWarning(null), 3500);
-      setTimeout(() => { censorCooldownRef.current = false; }, 2000);
-    }
-  }, [currentFrame]);
 
   const finalizeSticker = useCallback(() => {
     if (!activeSticker) return;
@@ -1031,7 +970,7 @@ export default function App() {
       playAction();
       floodFill(mainCtx, Math.floor(x), Math.floor(y), color);
       saveCanvasSnapshot(mainCanvas);
-      setTimeout(() => runCensorCheck(), 100);
+
       return;
     }
 
@@ -1270,7 +1209,7 @@ export default function App() {
 
     saveCanvasSnapshot(mainCanvas);
 
-    setTimeout(() => runCensorCheck(), 100);
+
   };
 
   useEffect(() => {
@@ -2070,21 +2009,7 @@ export default function App() {
               </div>
             )}
 
-            {censorWarning && (
-              <div
-                key={censorWarning.id}
-                className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none"
-              >
-                <div
-                  className="bg-red-500/90 backdrop-blur-sm text-white px-8 py-6 rounded-3xl border-4 border-white shadow-2xl max-w-md text-center animate-bounce"
-                >
-                  <div className="text-3xl sm:text-4xl font-black mb-2">🚫</div>
-                  <div className="text-lg sm:text-xl font-bold leading-snug">
-                    {censorWarning.text}
-                  </div>
-                </div>
-              </div>
-            )}
+
             {isPlaying && (
               <div className="absolute top-4 right-4 bg-red-500 text-white px-4 py-2 rounded-full font-bold animate-pulse border-4 border-black">
                 🔴 ЗАПИСЬ
